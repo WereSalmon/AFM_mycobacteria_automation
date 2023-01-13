@@ -905,6 +905,110 @@ def find_NN(point,posl):
             rmax = r
     return NN,rmax
 
+def in_mask (path,mask):
+    '''
+    Returns values of a path which are in a mask
+    Parameters:
+    ---------
+    path = numpy array consisting of coordinates in the mask
+    mask = numpy boolean array, showing the mask
+    '''
+    #first remove all values that are not in the picture
+    not_in_img =[not(pt[0]<np.shape(mask)[0]-1 and pt[0]>=0 and pt[1]<np.shape(mask)[1]-1 and pt[1]>=0) for pt in path]
+    if False in not_in_img:
+        not_in_img = np.where(not_in_img)
+        path = np.delete(path,not_in_img,0)
+    #next remove all values which are not in the mask
+    not_in_mask = []
+    for i in range (0,len(path)):
+        pt = path[i]
+        if mask[pt[0],pt[1]]:
+            continue
+        else:
+            not_in_mask.append(i)
+    return np.delete(path,not_in_mask,0)
+
+def crop_centerline(centerline_path,image,outline,true_starts,true_ends,crop):
+    '''Helper function. Crops a proportion of the points (determined by the crop parameter) from the ends of a centerline with a false pole
+    Paramters:
+    --------
+    centerline_path = list of points (numpy arrays) on a line in order of the arclength parametrization, initiated at the start node
+    '''
+    crop_length=round(len(centerline_path)*crop)
+    image = pts_to_img(centerline_path,skel)
+    (m,n)=np.shape(image)
+    if true_starts == []:
+        if axis:
+            start_centerline = image[:,0:n//2]
+            start_outline = outline[:,0:n//2]
+        else:
+            start_centerline=image[0:m//2,:]
+            start_outline=outline[0:m//2,:]
+        if intersection(start_centerline,start_outline):
+            centerline_path= centerline_path[crop_length:]
+
+    if true_ends == []:
+        if axis:
+            end_centerline = image[:,n//2:n]
+            end_outline = outline[:,n//2:n]
+        else:
+            end_centerline = image[m//2:m,:]
+            end_outline = outline[m//2:m,:]
+        if intersection(end_centerline,end_outline): 
+            centerline_path = centerline_path[:len(centerline_path)-crop_length]
+    return centerline_path
+
+def find_splines(points,true_starts,true_ends,start_pole,end_pole,k_thresh,crop):
+    '''
+    Helper function. Return spline of a centerline based on a set of ordered points.
+    Parameters
+    --------
+    points = list of points (numpy arrays) on a line in order of the arclength parametrization, initiated at the start node
+    '''
+    s = np.linspace(0,1,1000)
+    # remove repeated points
+    diff = np.diff(points,axis=0)==0
+    repeated = np.where(np.array([pt[0] and pt[1] for pt in diff]))
+    points = list(np.delete(points,repeated,axis=0))
+    if true_starts ==[]:
+        points = [np.array([start_pole[1],start_pole[0]])] + points
+    if true_ends ==[]:
+        points = points + [np.array([end_pole[1],end_pole[0]])]
+    tck,U=splprep(np.transpose(points))
+    s = np.linspace(0,1,1000)
+    [ys,xs]= splev(s,tck)
+    #calculate the curvature of the spline
+    v = np.transpose(splev(s,tck,der=1))
+    a = np.transpose(splev(s,tck,der=2))
+    k=abs(np.cross(v,a)/np.array([np.linalg.norm(V)**3 for V in v]))
+    # check if the curvature exceeds a threshold
+    if np.any(k>k_thresh):
+        warnings.warn('curvature threshold exceeded. additional pruning executed in response')
+        crop_length=round(len(points)*crop)
+        if true_starts == []:
+            points= points[crop_length:]
+        if true_ends == []:
+            points = points[:len(points)-crop_length]
+        #create a new spline
+        if true_starts ==[]:
+            points = [np.array([start_pole[1],start_pole[0]])] + points
+        if true_ends ==[]:
+            points = points + [np.array([end_pole[1],end_pole[0]])]
+        #remove repeated points
+        diff = np.diff(points,axis=0)==0
+        repeated = np.where(np.array([pt[0] and pt[1] for pt in diff]))
+        points = list(np.delete(points,repeated,axis=0))
+        #create a new spline
+        tck,U=splprep(np.transpose(points))
+        s = np.linspace(0,1,1000)
+        [ys,xs]= splev(s,tck)
+        v = np.transpose(splev(s,tck,der=1))
+        a = np.transpose(splev(s,tck,der=2))
+        k=abs(np.cross(v,a)/np.array([np.linalg.norm(V)**3 for V in v]))
+        if np.any(k>k_thresh):
+            warnings.warn('Curvature exceeds threshold')
+    return [xs,ys],s
+
 def prune2(skel,outline,mask,poles,sensitivity=5,crop=0.1,k_thresh=0.2):
     '''Creates a centerline of the cell from the skeleton, removing branches and extending the centerline to the poles
     skel = topological skeleton of the cell (boolean array)
@@ -916,108 +1020,7 @@ def prune2(skel,outline,mask,poles,sensitivity=5,crop=0.1,k_thresh=0.2):
     k_thresh = curvature (radius of curvature^{-1}) threshold for the final spline. above this the centerline will be cropped for a second time to ensure
     the ends of the centerline don't have abnormally high curvature. Default = 0.2 (corresponding to a radius of curvature of 5 pixels)
     '''
-    def crop_centerline(centerline_path):
-        '''Helper function. Crops a proportion of the points (determined by the crop parameter) from the ends of a centerline with a false pole
-        Paramters:
-        --------
-        centerline_path = list of points (numpy arrays) on a line in order of the arclength parametrization, initiated at the start node
-        '''
-        crop_length=round(len(centerline_path)*crop)
-        image = pts_to_img(centerline_path,skel)
-        if true_starts == []:
-            if axis:
-                start_centerline = image[:,0:n//2]
-                start_outline = outline[:,0:n//2]
-            else:
-                start_centerline=image[0:m//2,:]
-                start_outline=outline[0:m//2,:]
-            if intersection(start_centerline,start_outline):
-                #print('Starts',crop_length)
-                centerline_path= centerline_path[crop_length:]
-
-        if true_ends == []:
-            if axis:
-                end_centerline = image[:,n//2:n]
-                end_outline = outline[:,n//2:n]
-            else:
-                end_centerline = image[m//2:m,:]
-                end_outline = outline[m//2:m,:]
-            if intersection(end_centerline,end_outline): 
-                #print('Ends',crop_length)
-                centerline_path = centerline_path[:len(centerline_path)-crop_length]
-        return centerline_path
-    def find_splines(points):
-        '''
-        Helper function. Return spline of a centerline based on a set of ordered points.
-        Parameters
-        --------
-        points = list of points (numpy arrays) on a line in order of the arclength parametrization, initiated at the start node
-        '''
-        s = np.linspace(0,1,1000)
-        # remove repeated points
-        diff = np.diff(points,axis=0)==0
-        repeated = np.where(np.array([pt[0] and pt[1] for pt in diff]))
-        points = list(np.delete(points,repeated,axis=0))
-        if true_starts ==[]:
-            points = [np.array([start_pole[1],start_pole[0]])] + points
-        if true_ends ==[]:
-            points = points + [np.array([end_pole[1],end_pole[0]])]
-        tck,U=splprep(np.transpose(points))
-        s = np.linspace(0,1,1000)
-        [ys,xs]= splev(s,tck)
-        #calculate the curvature of the spline
-        v = np.transpose(splev(s,tck,der=1))
-        a = np.transpose(splev(s,tck,der=2))
-        k=abs(np.cross(v,a)/np.array([np.linalg.norm(V)**3 for V in v]))
-        # check if the curvature exceeds a threshold
-        if np.any(k>k_thresh):
-            warnings.warn('curvature threshold exceeded. additional pruning executed in response')
-            crop_length=round(len(points)*crop)
-            if true_starts == []:
-                points= points[crop_length:]
-            if true_ends == []:
-                points = points[:len(points)-crop_length]
-            #create a new spline
-            if true_starts ==[]:
-                points = [np.array([start_pole[1],start_pole[0]])] + points
-            if true_ends ==[]:
-                points = points + [np.array([end_pole[1],end_pole[0]])]
-            #remove repeated points
-            diff = np.diff(points,axis=0)==0
-            repeated = np.where(np.array([pt[0] and pt[1] for pt in diff]))
-            points = list(np.delete(points,repeated,axis=0))
-            #create a new spline
-            tck,U=splprep(np.transpose(points))
-            s = np.linspace(0,1,1000)
-            [ys,xs]= splev(s,tck)
-            v = np.transpose(splev(s,tck,der=1))
-            a = np.transpose(splev(s,tck,der=2))
-            k=abs(np.cross(v,a)/np.array([np.linalg.norm(V)**3 for V in v]))
-            if np.any(k>k_thresh):
-                warnings.warn('Curvature exceeds threshold')
-        return [xs,ys],s
-    def in_mask (path,mask):
-        '''
-        Returns values of a path which are in a mask
-        Parameters:
-        ---------
-        path = numpy array consisting of coordinates in the mask
-        mask = numpy boolean array, showing the mask
-        '''
-        #first remove all values that are not in the picture
-        not_in_img =[not(pt[0]<np.shape(mask)[0]-1 and pt[0]>=0 and pt[1]<np.shape(mask)[1]-1 and pt[1]>=0) for pt in path]
-        if False in not_in_img:
-            not_in_img = np.where(not_in_img)
-            path = np.delete(path,not_in_img,0)
-        #next remove all values which are not in the mask
-        not_in_mask = []
-        for i in range (0,len(path)):
-            pt = path[i]
-            if mask[pt[0],pt[1]]:
-                continue
-            else:
-                not_in_mask.append(i)
-        return np.delete(path,not_in_mask,0)
+        
     if np.any(np.isnan(np.array(poles))):
         raise ValueError('Poles must be numerical values, not np.NaN')
     #initializing parameters
@@ -1069,7 +1072,7 @@ def prune2(skel,outline,mask,poles,sensitivity=5,crop=0.1,k_thresh=0.2):
             raise ValueError('Skeleton has been erased')
         if np.linalg.norm(np.array([centerline_path[0][1],centerline_path[0][0]])-end_pole) < np.linalg.norm(np.array([centerline_path[0][1],centerline_path[0][0]])-start_pole):
             centerline_path.reverse()
-        centerline_path = crop_centerline(centerline_path)
+        centerline_path = crop_centerline(centerline_path,image,outline,true_starts,true_ends,crop)
         if len(centerline_path)<=5:
             raise ValueError('Skeleton has been erased')
         [xs,ys],u = find_splines(centerline_path)
@@ -1094,7 +1097,7 @@ def prune2(skel,outline,mask,poles,sensitivity=5,crop=0.1,k_thresh=0.2):
         centerline_path=order_by_NN(centerline_path,nodes[path[0]]['o'],nodes[path[-1]]['o'],max(m,n)/2)
         if np.linalg.norm(np.array([centerline_path[0][1],centerline_path[0][0]])-end_pole) < np.linalg.norm(np.array([centerline_path[0][1],centerline_path[0][0]])-start_pole):
             centerline_path.reverse()
-        centerline_path = crop_centerline(centerline_path)
+        centerline_path = crop_centerline(centerline_path,image,outline,true_starts,true_ends,crop)
         #find the length of each centerline
         length = len(centerline_path)
         # add to the list of centerlines and lengths
