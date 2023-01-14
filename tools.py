@@ -1196,17 +1196,3 @@ def arc_length(pts):
         length = np.linalg.norm(pts[i] - pts[i-1])
         lengths.append(length)
     return np.sum(lengths)
-
-def arc_length(pts):
-    '''
-    Find the arclength of a curve given by a set of points
-    Paramters
-    --------
-    pts = array-like coordinates [x1,x2,....]
-    '''
-    pts = np.array(np.transpose(pts))
-    lengths = []
-    for i in range (1,len(pts)):
-        length = np.linalg.norm(pts[i] - pts[i-1])
-        lengths.append(length)
-    return np.sum(lengths)
