@@ -7,22 +7,28 @@ from scipy.interpolate import splev
 from cellpose import utils
 from skimage.morphology import skeletonize
 import warnings
+import copy
 
-def create_centerline(mask):
+def create_centerline(m,outline=None):
     '''
     Finds the centerline of a mask
     
     Parameters
     ---------
-    mask = an opencv image (should have only one nonzero value)
+    m = an opencv image (should have only one nonzero value)
     
     Returns
     -------
     centerline = a 2d boolean array (True where the centerline is, False everywhere else)
     '''
-    new_mask=mask[:,:,0]>0
+    mask = copy.deepcopy(m)
+    if len(np.shape(mask))>2:
+        new_mask=mask[:,:,0]>0
+    else:
+        new_mask=mask>0
     unpruned_skel = padskel(mask)
-    outline = utils.masks_to_outlines(new_mask)
+    if outline == None:
+        outline = utils.masks_to_outlines(new_mask)
     poles,centroid = explore_poles(outline)
     centerline,length,pts,s = prune2(unpruned_skel,outline,new_mask,poles,sensitivity=5)
     return centerline
