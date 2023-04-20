@@ -1196,3 +1196,23 @@ def arc_length(pts):
         length = np.linalg.norm(pts[i] - pts[i-1])
         lengths.append(length)
     return np.sum(lengths)
+
+def masks_list(mask_img):
+    '''
+    Get list of binary images containing a single mask from cellpose outputs
+    
+    Parameters:
+    ----------
+    mask_img = the masks returned by cellpose
+    
+    Returns:
+    -------
+    maskl = a list of binary images, each corresponding to a mask
+    '''
+    vals = np.unique(mask_img)
+    maskl = []
+    for v in vals:
+        if v>0:
+            mask = mask_img==v
+            maskl.append(mask*255)
+    return maskl
